@@ -1,0 +1,29 @@
+{
+  "name": "telgrambotprime",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js",
+
+    "set-webhook": "telegraf -m setWebhook"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+
+    "axios": "^1.3.4",
+    "fs": "^0.0.1-security",
+    "googleapis": "^123.0.0",
+    "html-to-text": "^9.0.5",
+    "jsdom": "^22.0.0",
+    "serverless-http": "^3.1.1",
+    "telegraf": "^4.12.2"
+  },
+  "devDependencies": {
+    "g-sheets-api": "^2.2.0",
+    "typescript": "^4.9.5"
+  }
+}
