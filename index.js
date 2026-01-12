@@ -1,50 +1,166 @@
-const { Telegraf, Extra, Markup } = require('telegraf');
-const { message } = require('telegraf/filters');
-const axios = require('axios')
+import { Telegraf } from 'telegraf';
+import axios from 'axios';
+import UserData from './memory.js';
+import brandAllias from './allias.json' assert { type: 'json' };
+import { google } from 'googleapis';
 
-const bot = new Telegraf("6475693391:AAGfTpE9JgQAMDZDIp3LgUdd2Dqo5Y9c-Uk")
-const apiKey ="d9448806eab5eadca4ace89d793be3dd0777e8a43dd8e4a8c606f624ee134f9e"
-
-const { get } = require('http');
-
-var UserData = require('./memory')
-// // create an express app
-// const express = require('express')
-// const app = express()
-
-
-const {google} = require('googleapis');
-const spreadsheet_id ="1dXj97PDpTxPB0zFErA6-CGZdMFRuZsIHpfvpisPCX_c"
+const bot = new Telegraf("6475693391:AAGESWjxdJ2ciP52I5le2wu_a9yF8vGODuw");
+const apiKey = "d9448806eab5eadca4ace89d793be3dd0777e8a43dd8e4a8c606f624ee134f9e";
+const spreadsheet_id = "1WIe4Xv-WU7BG9-KXWLDsPqAEhRDSmIuu_m7KEg9qlb0";
 const auth = new google.auth.GoogleAuth({
     keyFile: 'credentials.json',
     scopes: 'https://www.googleapis.com/auth/spreadsheets'
 });
 
+async function AddZero(num) {
+    return (num >= 0 && num < 10) ? "0" + num : num + "";
+}
+async function logQueries(phone_number, txt){
+    // assign the current time stamp in DD/MM/YYYY HH:MM:SS format
+    var now = new Date();
+    var current_time = [[await AddZero(now.getDate()), 
+        await AddZero(now.getMonth() + 1), 
+        now.getFullYear()].join("/"), 
+        [await AddZero(now.getHours()), 
+        await AddZero(now.getMinutes())].join(":"), 
+        now.getHours() >= 12 ? "PM" : "AM"].join(" ");
 
-
-
-async function getBrandList(category){
-    // console.log("Inside getBrandList function")
-    // console.log("ENVIROPNMNET IS "+process.env.environment)
-    let sheetName = category
-    const products = await readExcelSheetData(sheetName=sheetName);
-    let brand_list = []
-    let index =0;
-    let response = "";
-    // console.log(products[0][0])
-    for (let i = 0; i < products.length; i++) {
-        let brand = products[i][0].toString().toUpperCase();
-        if(brand_list.includes(brand) == false){
-            brand_list[index] = brand;
-            index++;
-        }
+    console.log("Current time is : "+current_time)
+    console.log("Inside logQueries function")
+    let entries = await readExcelSheetData("Logs")
+    // console.log(entries)
+    let row_number = entries.length+1
+    console.log("Row number is : "+row_number)
+    try{
+        const client = await auth.getClient();
+        const googleSheets = google.sheets({version: 'v4', auth: client});
+        googleSheets.spreadsheets.values.update({
+            auth,
+            spreadsheetId: spreadsheet_id,
+            range: `Logs!A${row_number}`,
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+                values: [[current_time,phone_number,txt]]
+            }
+        })
     }
-    return brand_list;
+    catch(err){
+        console.log(err)
+    }
+    }
+
+async function forwardRequestToAdmin(chat_id, phone_number){
+    let admin_chat_id = 5887384108;
+    // create a inline keyboard with two buttons Accept and Reject and has text with the phone number
+    bot.telegram.sendMessage(admin_chat_id, 'A request has been raised by '+phone_number, {
+        reply_markup: {
+            inline_keyboard: [[{text: 'Accept', callback_data: 'Accept_'+chat_id+"_"+phone_number}],[{text: 'Reject', callback_data: 'Reject_'+chat_id+"_"+phone_number}]]
+            }})
 }
 
+async function getUserPhone(chat_id){    
+    const client = await auth.getClient();
+    const googleSheets = google.sheets({version: 'v4', auth: client});
+    const getRows = await googleSheets.spreadsheets.values.get({
+        auth,
+        spreadsheetId: spreadsheet_id,
+        range: 'Users',
+    });
+    const rows = getRows.data.values;
+    // check if the chat_id exists in the first column
+    let phone_number = 0;
+    for (let i = 0; i < rows.length; i++) {
+        if(rows[i][1] == chat_id){
+            phone_number = rows[i][0];
+        }
+    }
+    return phone_number;
+}
+
+async function checkUserLogin(chat_id){
+    const client = await auth.getClient();
+    const googleSheets = google.sheets({version: 'v4', auth: client});
+    const getRows = await googleSheets.spreadsheets.values.get({
+        auth,
+        spreadsheetId: spreadsheet_id,
+        range: 'Users',
+    });
+    const rows = getRows.data.values;
+    // check if the chat_id exists in the first column
+    let userExists = false;
+    console.log("CHAT ID IS : "+chat_id)
+
+    for (let i = 0; i < rows.length; i++) {
+        if(parseInt(rows[i][1]) === parseInt(chat_id)){
+            userExists = true;
+        }
+    }
+   if(userExists){
+    UserData.setUserStatus(chat_id, "REGISTERED")
+
+   }
+    else if(UserData.getUserStatus(chat_id) == undefined){
+        UserData.setUserStatus(chat_id, "NOT_REGISTERED")
+    }
+    return userExists;
+
+}
+async function registerUser(chat_id){
+    // ask user for phone number
+    UserData.setUserStatus(chat_id, "WAITING_FOR_PHONE_NUMBER")
+    UserData.getUserStatus(chat_id)
+    bot.telegram.sendMessage(chat_id, "Please enter your phone number")
+}
+async function enterUserDetails(phone_number, chat_id, row_number){
+    // update the phone number in the sheet
+    const client = await auth.getClient();
+    const googleSheets = google.sheets({version: 'v4', auth: client});
+    googleSheets.spreadsheets.values.update({
+        auth,
+        spreadsheetId: spreadsheet_id,
+        range: `Users!A${row_number}`,
+        valueInputOption: "USER_ENTERED",
+        resource: {
+            values: [[phone_number,chat_id]]
+        }
+    })
+    // update the user status
+    UserData.setUserStatus(chat_id, "REGISTERED")
+    // send a message to the user
+
+
+}
+async function getBrandList(sheet){
+
+    let products = await readExcelSheetData(sheet)
+    // get products length
+    let product_length = products.length
+    console.log("Product length is : "+product_length)
+
+    // take the first column
+    let brand_list = []
+    for (let i = 0; i < products.length; i++) {
+        if(!brand_list.includes(products[i][0])){
+            brand_list.push(products[i][0])
+        }
+    }
+    return brand_list
+}
+async function getAlliasList(){
+    console.log(" GET ALLIAS LIST FUNCTION HAS STARTED ")
+    let brand_list =[]
+    for(let key in brandAllias){
+        let lst = brandAllias[key]
+        // add lst to brand_list
+        brand_list = brand_list.concat(lst)
+    }
+    console.log(brand_list)
+    return brand_list
+}   
 async function askUserBrand(ctx, category){
     let brand_list = []
     if(category == "Combo"){
+        console.log("Will look up for Combo Brands")
         brand_list = await getBrandList("Combo");
     }
     else if(category == "Battery"){
@@ -63,7 +179,7 @@ async function askUserBrand(ctx, category){
     for (let i = 0; i < brand_list.length; i++) {
         // console.log("DOING FOR "+brand_list[i])
         lst.push({
-        text: brand_list[i],
+        text: brand_list[i].toString().toUpperCase(),
         callback_data: brand_list[i],
     })
     // console.log("Current value of j is "+j)
@@ -95,8 +211,10 @@ async function askUserBrand(ctx, category){
             return buttons[i].indexOf(item) === index
         })
     }
+    // console.log("Buttons are : "+buttons)
 
-    
+    UserData.setCategory(ctx.chat.id, "Combo")
+    console.log("Category is : "+UserData.getCategory(ctx.chat.id))
 
     
     await bot.telegram.sendMessage(ctx.chat.id, 'Choose a brand', {
@@ -104,9 +222,9 @@ async function askUserBrand(ctx, category){
             inline_keyboard: buttons
             }})
     return;
+  
 
 }
-
 async function readExcelSheetData(sheetName) {
     // console.log("Reading from "+sheetName+" sheet")
     try {
@@ -114,11 +232,6 @@ async function readExcelSheetData(sheetName) {
         // Process the data further as needed
         const client = await auth.getClient();
         const googleSheets = google.sheets({version: 'v4', auth: client});
-        // const metadata = await googleSheets.spreadsheets.get({
-        //     auth,
-        //     spreadsheetId: spreadsheet_id,
-        // });
-        // console.log(metadata.data.sheets[0]);
         const getRows = await googleSheets.spreadsheets.values.get({
             auth,
             spreadsheetId: spreadsheet_id,
@@ -129,75 +242,199 @@ async function readExcelSheetData(sheetName) {
 
       } catch (error) {
         console.error('Error reading Excel sheet:', error);
-      }
-    }
-
-async function seacrchCombo(productName, category, brand){
-    let product_name= productName.toUpperCase();
+      }}
+async function returnEntireSheet(brand){
+    console.log("Inside returnEntireSheet function for brand : "+brand)
     let sheetName = "Combo"
     const products = await readExcelSheetData(sheetName=sheetName);
-    console.log("Inside search model")
-    // console.log(products);
-    let product_list = []
+    console.log("Length of products is : "+products.length)
+    console.log("First element of products is : "+products[0][0])
+   
+    let product_json = {}
     let index =0;
     let response = "";
+    let len_prd_lst = products.length
+    console.log("Length of product list is : "+len_prd_lst)
     // look up in column name Model if the text contains the product name, if exists return the value in column Price else return Not in Stock
-    for (let i = 0; i < products.length; i++) {
-        // convert product[i][1] to string and upper case
-        let product = products[i][1].toString().toUpperCase();
-        let brand_name = products[i][0].toString().toUpperCase();
-        if(brand_name.includes(brand.toString().toUpperCase()) && product.includes(product_name) && products[i][7] >= 1){
-        // assign the product name and price to a dictionary
-        // let product_name = product[i][0].toString+" "+products[i][0].toString()
-        // console.log("Product type is : "+products[i][2])
-        product_list[index] = {brand:products[i][0],product_name: products[i][1], price: products[i][6], type:products[i][2], fram:products[i][3], quality:products[i][4],pasting:products[i][5]};
-        product_list.push(product_list[index]);
-        // response = response+product_list[index].product_name+" : Price "+product_list[index].price+" "+extra_text+"\n"+"\n";
-        index++;
-        // return products[i][6];
+    
+    for (let i = 0; i < len_prd_lst; i++) 
+        {
+            // console.log(i)
+        let prd = products[i][1].toString().toUpperCase()
+        // replace all the spaces in the product name with empty string
+        // console.log("Product name is : "+prd)
+        prd = prd.replace(/\s/g, '')
+        if(brand.toString().toUpperCase() == products[i][0].toString().toUpperCase() && parseInt(products[i][5]) >= 1)
+        {
+            console.log("Brand is : "+brand)
+            console.log("Sheet Brand name is : "+products[i][0])
+            var type = products[i][2]
+            if(type.length == 0){type = ""}
+            var fram = products[i][3]
+            if(fram.length == 0){fram = ""}
+        var products_lst = products[i][1].split("/")
+
+
+        for (let j = 0; j < products_lst.length; j++) {
+            products_lst[j] = products_lst[j].trim()
+            var first_alphabet = products_lst[j].charAt(0)
+            // check if the first alphabet exists as a key in product_list
+            if(first_alphabet in product_json){
+                // append the product name to the existing list
+                product_json[first_alphabet].push(products_lst[j]+" "+type+" "+fram+" "+"Price : "+products[i][4])
+            }
+            else{
+                // create a new list with the product name
+                product_json[first_alphabet] = [products_lst[j]+" "+type+" "+fram+" "+"Price : "+products[i][4]]
+            }
         }
-        else if(brand_name.includes(brand.toString().toUpperCase()) && product.includes(productName) && products[i][7] <= 0){
-        product_list[index] = {brand:products[i][0],product_name: products[i][1], price: products[i][6], type:products[i][2], fram:products[i][3], quality:products[i][4],pasting:products[i][5]};
-        // change price to not in stock
-        product_list[index].price = "Not in Stock";
-        product_list.push(product_list[index]);
-        // response = response+product_list[index].product_name+" : Not in Stock "+"\n"+"\n";
-        index++
-    }
+        }
+
+
 }
-    // get the length of profuct_list
-    // console.log(product_list);
+
+// rearrange the list of dictionaries with respect to key in alphabetical order
+let sorted_product_json = {}
+let keys = Object.keys(product_json).sort()
+for (let i = 0; i < keys.length; i++) {
+    sorted_product_json[keys[i]] = product_json[keys[i]]
+}
+console.log(sorted_product_json)
+
+
+return sorted_product_json
+
+}
+
+async function seacrchCombo(productName,brand){
+    let product_name= productName.toUpperCase().trim();
+    console.log("123 Product name is : "+product_name)
+    if (product_name.includes("PLUS")){
+        product_name = product_name.replace("PLUS","+")
+    }
+    if (product_name.includes("(5G)")){
+        product_name = product_name.replace("(5G)","5G")
+    }
+    if (product_name.includes("(4G)")){
+        product_name = product_name.replace("(4G)","4G")
+    }
+    if (product_name.includes("5G")){
+        product_name = product_name.replace("5G","")
+    }
+    if (product_name.includes("4G")){
+        product_name = product_name.replace("4G","")
+    }
+
+
+    let sheetName = "Combo"
+    const products = await readExcelSheetData(sheetName=sheetName);
+    console.log("Inside search model, searching for "+brand+" "+product_name+" in "+sheetName+" sheet")
+    
+    let product_list = []
+  
+    let response = "";
+
+    if (brand == undefined){
+        console.log("Brand is undefined ...")
+        brand = ""
+        let index =0;
+        for (let i=0; i< products.length; i++){
+            let prd = products[i][1].toString().toUpperCase()
+            prd = prd.replace(/\s/g, '')
+            prd = prd.replace("PLUS","+")
+            prd = prd.replace("(5G)","5G")
+            prd = prd.replace("(4G)","4G")
+
+            if(prd.includes(product_name) && parseInt(products[i][5]) >= 1)
+            {
+               
+                console.log("Row number is : "+i)
+                console.log("Product name is : "+products[i][1])
+                var type = products[i][2]
+                console.log("Type is : "+type)  
+                if(type.length == 0){type = ""}
+                var fram = products[i][3]
+                console.log("Fram is : "+fram)
+                if(fram.length == 0){fram = ""}
+
+                product_list[index] = {"brand":products[i][0],
+                    "product_name": products[i][1], 
+                    "price": products[i][4],
+                     "type":type, 
+                     "fram":fram};
+        
+                product_list.push(product_list[index]);
+                index++;
+            }
+        }
+        console.log("Product list is : "+product_list)
+        for (let i = 0; i < product_list.length; i++) {
+            console.log(product_list[i].brand+" "+product_list[i].product_name+" : Price : "+product_list[i].price+" "+product_list[i].type+" "+product_list[i].fram)
+        }
+
+    }
+
+    else{
+        console.log("Inside else block")
+        let index =0;
+        console.log("Brand is : "+brand)
+        console.log("Product name is : "+product_name)
+        for (let i = 0; i < products.length; i++) {
+            let prd = products[i][1].toString().toUpperCase()
+            prd = prd.replace(/\s/g, '')
+            prd = prd.replace(/\s/g, '')
+            prd = prd.replace("PLUS","+")
+            prd = prd.replace("(5G)","5G")
+            prd = prd.replace("(4G)","4G")
+   
+            if(brand.toString().toUpperCase() == products[i][0].toString().toUpperCase() && prd.includes(product_name) && parseInt(products[i][5]) >= 1)
+            {
+                var type = products[i][2]
+                if(type.length == 0){type = undefined}
+                var fram = products[i][3]
+                if(fram.length == 0){fram = undefined}
+                product_list[index] = {"brand":products[i][0],
+                    "product_name": products[i][1], 
+                    "price": products[i][4],
+                     "type":type, 
+                     "fram":fram};
+            }
+            product_list.push(product_list[index]);
+            index++;
+        }
+    }
+    // remove the empty elements from the list
     product_list = product_list.filter(function (el) {
         return el != null;
         });
-    // console.log(product_list)
-    ;
-    // remove the last element from the list as its a duplicate
-    product_list.pop()
-         
+        console.log(product_list)
+        // remove duplicates from the list with respect to product name, price and type and fram
+
+        product_list = product_list.filter((thing, index, self) =>
+        index === self.findIndex((t) => (
+            t.product_name === thing.product_name && t.price === thing.price && t.type === thing.type && t.fram === thing.fram
+        ))
+    )
+    
+       
+
+    // product_list.pop()
     if(product_list.length == 0){
         return "Not in Stock";
         }
     else{
-        //sort product_list based on price
-        // product_list.sort((a, b) => (a.price > b.price) ? 1 : -1)
-        // console.log(product_list);
-        // loop through the product_list and append the product name and price to response
-
         for (let i = 0; i < product_list.length; i++) {
             let extra_text = ""
-            console.log()
-            if(product_list[i].type != ""){extra_text = extra_text + " "+"("+product_list[i].type+")";}
-            if(product_list[i].fram != ""){extra_text = extra_text + " "+"("+product_list[i].fram+")";}
-            if(product_list[i].quality != ""){extra_text = extra_text + " "+"("+product_list[i].quality+")";}
-            if(product_list[i].pasting != ""){extra_text = extra_text + " "+"("+product_list[i].pasting+")";}
+            if(product_list[i].type !=undefined){extra_text = extra_text + " "+""+product_list[i].type+"";}
+            if(product_list[i].fram != undefined){extra_text = extra_text + " "+""+product_list[i].fram+"";}
             response = response+product_list[i].brand+" "+product_list[i].product_name+" : Price : "+product_list[i].price+" "+extra_text+"\n"+"\n";
         }
-        
+
+        console.log("Response is : "+response)
         return response;
-        
     }
     }
+
 async function seacrchChargingStrip(productName, category){
     let product_name= productName.toUpperCase();
     // console.log("Reading from Charging Strip sheet")
@@ -246,7 +483,7 @@ async function seacrchChargingStrip(productName, category){
         for (let i = 0; i < product_list.length; i++) {
             let extra_charging_text=""
             if(product_list[i].type != undefined)
-            {extra_charging_text = extra_charging_text + " "+"("+product_list[i].type+")";}
+            {extra_charging_text = extra_charging_text + " "+""+product_list[i].type+"";}
             response = response+product_list[i].product_name+" : Price "+product_list[i].price+" "+extra_charging_text+"\n"+"\n";
 
         }
@@ -254,7 +491,7 @@ async function seacrchChargingStrip(productName, category){
         }
     }
 
-async function seacrchBattery(productName, category){
+async function seacrchBattery(productName, category, brand){
     let product_name= productName.toUpperCase();
     let sheetName = "Battery"
     const products = await readExcelSheetData(sheetName=sheetName);
@@ -264,7 +501,6 @@ async function seacrchBattery(productName, category){
     let response = "";
     for (let i = 0; i < products.length; i++) {
         let product = products[i][1].toString().toUpperCase();
-        
         if(product.includes(product_name)&& products[i][3]<=0){
             console.log(product_name)
         product_list[index] = {product_name: products[i][1], price: "Not in Stock", brand: products[i][0]};
@@ -302,18 +538,44 @@ async function seacrchBattery(productName, category){
         return response;
         }
     }
-async function initialChoice(ctx){
-
-    bot.telegram.sendMessage(ctx.chat.id, 'Choose a category', {
-        reply_markup: {
-            inline_keyboard: [[{text: 'Combo', callback_data: 'Combo'}],[{text: 'Charging Strip', callback_data: 'Charging Strip'}],[{text: 'Battery', callback_data: 'Battery'}]]
-            }})
-        }
-    
-
 bot.use(async(ctx,next)=>{
     console.log("Inside use function")
     console.log(ctx.from)
+    const userExists = await checkUserLogin(ctx.chat.id)
+    if(!userExists){
+        if(UserData.getUserStatus(ctx.chat.id) == "NOT_REGISTERED"){
+            console.log(UserData.getUserStatus(ctx.chat.id))
+        await registerUser(ctx.chat.id);}
+        else if(UserData.getUserStatus(ctx.chat.id) == "WAITING_FOR_PHONE_NUMBER" && ctx.updateType == "message"){
+            let phone_number = ctx.message.text;
+            console.log(phone_number)
+            if(phone_number.startsWith("+91")){
+                phone_number = phone_number.slice(3)
+            }
+            else if(phone_number.startsWith("0")){
+                phone_number = phone_number.slice(1)
+            }
+            // check if the phone number is 10 digits and should start with 6,7,8,9
+            if(phone_number.length == 10 && (phone_number.startsWith("6") || phone_number.startsWith("7") || phone_number.startsWith("8") || phone_number.startsWith("9"))){
+                // update the phone number in the sheet
+                // get the row number of the chat_id
+                
+                const users = await readExcelSheetData("Users")
+                console.log("Number of row are : "+users.length)
+                let row_number = users.length+1
+                console.log("Rows are : "+users)
+                forwardRequestToAdmin(ctx.chat.id, phone_number)
+                // update the user status
+                
+                // send a message to the user
+                bot.telegram.sendMessage(ctx.chat.id, "You request has been sent to the admin. You will be notified once your request is accepted")
+            }
+            else{
+                // ask user to enter a valid phone number
+                bot.telegram.sendMessage(ctx.chat.id, "Please enter a valid phone number")
+            }}
+        }
+
     // check if text exists in the message
     if(ctx.message != undefined){
         ctx.state.updateType = "message"
@@ -322,93 +584,194 @@ bot.use(async(ctx,next)=>{
         ctx.state.updateType = "callback_query"
     }
 
-    // console.log("Brand read is : "+UserData.getbrandRead(ctx.from.id))
-    // console.log(ctx)
-
-    // check if the user is already in the database 
-    
-    // console.log("Brand read is : "+ctx.state.branRead)
-    if (UserData.getbrandRead(ctx.from.id) == undefined){
-    UserData.setBrandRead(ctx.from.id,"true")
-    // console.log(UserData.getbrandRead(ctx.from.id))
-    let comboBrands =  await getBrandList("Combo");
-    // console.log(comboBrands)
-    UserData.setComboBrands(key=ctx.from.id,value=comboBrands)
-    // console.log(UserData.getComboBrands(ctx.from.id))
-    let batteryBrands =  await getBrandList("Battery");
-    // console.log("Battery Brands are : "+batteryBrands)
-    UserData.setBatteryBrands(key=ctx.from.id,value=batteryBrands)
-    // console.log("Battery Brands are : "+UserData.getBatteryBrands(ctx.from.id))
-    let chargingStripBrands =  await getBrandList("Charging Strip");
-    // console.log("Charging Brands are : "+chargingStripBrands)
-    UserData.setChargingStripBrands(key=ctx.from.id,value=chargingStripBrands)
-    // console.log("Charging Brands are : "+UserData.getChargingStripBrands(ctx.from.id))
-    
-}
-
-    if(ctx.state.updateType == 'callback_query'){
+    if(userExists && ctx.state.updateType == 'callback_query'){
         console.log("Inside callback query")
         var chat_id = ctx.from.id
-        console.log("Chat id is : "+chat_id)
+        console.log(ctx.update.callback_query.data)
         // console.log(UserData.getBatteryBrands(chat_id))
-        if (ctx.update.callback_query.data == "Combo" || ctx.update.callback_query.data == "Charging Strip" || ctx.update.callback_query.data == "Battery"){
-            UserData.setCategory(chat_id,ctx.update.callback_query.data)
+        if (ctx.update.callback_query.data == "Combo" || ctx.update.callback_query.data == "Charging Strip" || ctx.update.callback_query.data.includes("Accept")|| ctx.update.callback_query.data.includes("Reject")){
+            {
+                UserData.setCategory(chat_id,ctx.update.callback_query.data)
             console.log("Category is : "+UserData.getCategory(chat_id))
-
+            if(UserData.getCategory(chat_id) == "Combo"){
+                let brand = await askUserBrand(ctx, ctx.update.callback_query.data)
+                UserData.setBrand(chat_id, brand)
+                UserData.setBrandRead(chat_id, brand)
+                
+            
+            }
+            else if(UserData.getCategory(chat_id) == "Charging Strip"){
+                // bot.telegram.sendMessage(ctx.chat.id, 'Please enter the model name in the following format : \n <b>Model Name</b> \n\n For example : \n <i>8G C/C</i>',{ parse_mode: 'HTML' })
             await askUserBrand(ctx, ctx.update.callback_query.data)
-    }
-    // check if the call back data is from the list of brands
-    else if (ctx.update.callback_query.data == "Yes"){
-        await initialChoice(ctx)
-        // console.log("Inside Yes")
-        // console.log(ctx.chat.id)
-        // let conversation_id = ctx.chat.id
-        UserData.setCategory(ctx.chat.id,"None")
-    }
-
-    else if (ctx.update.callback_query.data == "No"){
-        bot.telegram.sendMessage(ctx.chat.id, 'Thank you for using our service, I would also take the opputunity to intoduce you to our other services. Select OTHER PRODUCTS to view the same or END CONVERSATION to end', {
-            reply_markup: {
-                inline_keyboard: [[{text: 'OTHER PRODUCTS', callback_data: 'OTHER PRODUCTS'}],[{text: 'END CONVERSATION', callback_data: 'END CONVERSATION'}]]
-                }})
-    }
-
-    else if (ctx.update.callback_query.data == "OTHER PRODUCTS"){
-        await searchOptherCategories(ctx)
-    let conversation_id = ctx.update.message.chat.id
-    UserData.setCategory(conversation_id, "None")}
-    else if (ctx.update.callback_query.data == "END CONVERSATION"){
-        bot.telegram.sendMessage(ctx.chat.id, 'Thank you for using our service, I would also take the opputunity to intoduce you to our other services. Select OTHER PRODUCTS to view the same or END CONVERSATION to end')}
-
-
-    else if (UserData.getComboBrands(ctx.from.id).includes(ctx.update.callback_query.data) || (ctx.update.callback_query.data).includes("(100% OG)") || (ctx.update.callback_query.data).includes("TOTAL")){
-            UserData.setBrand(chat_id,ctx.update.callback_query.data)
-            console.log("Brand is : "+UserData.getBrand(chat_id))
-            await ctx.reply("Please enter the model name")
+            }
+            else if(UserData.getCategory(chat_id) == "Battery"){
+                bot.telegram.sendMessage(ctx.chat.id, 'Please enter the model name in the following format : \n <b>Brand Name</b> <i>Model Name</i> \n\n For example : \n <b>(TOTAL)</b> <i>4C BATT</i>',{ parse_mode: 'HTML' })
+                
+                await askUserBrand(ctx, ctx.update.callback_query.data)
+            }
+            else if(UserData.getCategory(chat_id) == "FRAME"){
+                ctx.reply("Coming Soon...")
             }
 
-    
-
+            else if(UserData.getCategory(chat_id) == "BACK PANELS"){
+                ctx.reply("Coming Soon..")
+            }
+            else if(ctx.update.callback_query.data.toString().includes("Accept")){
+                console.log("Inside Accept")
+                // get the chat id from the callback data
+                let chat_id = ctx.update.callback_query.data.split("_")[1]
+                // get the phone number from the callback data
+                let phone_number = ctx.update.callback_query.data.split("_")[2]
+                console.log("Accepted request for "+chat_id+" "+phone_number)
+                // get the row number of the chat_id
+                let users = await readExcelSheetData("Users")
+                await enterUserDetails(phone_number, chat_id, users.length+1)
+                // update the user status
+                // send a message to the user
+                bot.telegram.sendMessage(chat_id, "You have been registered successfully. You can now start using the bot")
+            }
+            else if(ctx.update.callback_query.data.toString().includes("Reject")){
+                console.log("Inside Reject")
+                // get the chat id from the callback data
+                let chat_id = ctx.update.callback_query.data.split("_")[1]
+                // get the phone number from the callback data
+                let phone_number = ctx.update.callback_query.data.split("_")[2]
+                console.log("Rejected request for "+chat_id+" "+phone_number)
+                // update the user status
+                // send a message to the user
+                bot.telegram.sendMessage(chat_id, "Sorry! Your request has been rejected. Please contact the admin for more details")
+            }
+        }
 }
+        else if (ctx.update.callback_query.data == "Yes"){
+            // UserData.setCategory(ctx.chat.id,"None")
+            console.log("Inside Yes")
+            await askUserBrand(ctx,"Combo")
+        }
+        
+        else if (ctx.update.callback_query.data == "No"){
+            // UserData.setCategory(ctx.chat.id,"None")
+            bot.telegram.sendMessage(ctx.chat.id, 'Thank you for using our service. \n Please view some of our other products by clicking on the below link : \n\n <a href="https://drive.google.com/drive/folders/1sFOIEtquVmnsLOIcEmiq8uxsnRFmaVKH?usp=drive_link">Accesories</a> \n\n' , { parse_mode: 'HTML' });
+                }
+        else if (ctx.update.callback_query.data == "OTHER PRODUCTS"){
+            await searchOptherCategories(ctx)
+            let conversation_id = ctx.update.message.chat.id
+        }
+        else if (ctx.update.callback_query.data == "END CONVERSATION"){
+            bot.telegram.sendMessage(ctx.chat.id, 'Thank you for using our service. Hope You had a pleasant experience')
+            
+        }
+        else if((await getBrandList("Combo")).includes(ctx.update.callback_query.data) ){
+            console.log("Inside brand list")
+            let conversation_id = ctx.update.callback_query.message.chat.id
+            UserData.setBrand(conversation_id, ctx.update.callback_query.data)
+            UserData.setBrandRead(conversation_id, ctx.update.callback_query.data)
+            console.log("Brand is : "+UserData.getBrand(conversation_id))
+            ctx.reply("For brand : "+UserData.getBrand(conversation_id)+"\n Please enter ONLY the model number for example : '9a' or 'a12' or 's1 pro' or 'Nord ce2' or '9 power'")
+            UserData.setCategory(conversation_id, "Combo")
+        }
+    }
 
-else if (ctx.state.updateType == "message" && ctx.message.text != "/start" && ctx.message.text != "/category" && ctx.message.text != "/help" && ctx.message.text != "/faq" && ctx.message.text != "/about" && ctx.message.text != "/coin" && ctx.message.text != "/cat" && ctx.message.text != "/menu" && ctx.message.text != "/echo")
+else if (userExists && ctx.state.updateType == "message" && !ctx.message.text.includes("start") && ctx.message.text != "/category" && ctx.message.text != "/help" && ctx.message.text != "/faq" && ctx.message.text != "/about" && ctx.message.text != "/channel_handler" && ctx.message.text != "/cat" && ctx.message.text != "/menu" && ctx.message.text != "/echo")
 {
+
     console.log("Inside message")
     let conversation_id = ctx.message.chat.id
-    // console.log("Category is : "+UserData.getCategory(conversation_id))
+    // let conversation_id = 5887384108
+    console.log(ctx)
+    // check if message has a hi or hello or hey
+    
+  
+    
+    
+    if(ctx.message.text.toUpperCase().includes("HI") || ctx.message.text.toUpperCase().includes("HELLO") || ctx.message.text.toUpperCase().includes("HEY")){
+        UserData.setCategory(conversation_id, "None")
+    }
+
+    console.log("Category is : "+UserData.getCategory(conversation_id))
     if(UserData.getCategory(conversation_id) == "Combo")
     {
         console.log("Inside Combo************"+ UserData.getCategory(conversation_id))
         let productName = ctx.message.text.toUpperCase();
-        console.log("Product Name is : "+productName)
+        console.log("Model name is entered by user : "+productName)
 
-        let response =  await seacrchCombo(productName, category="Combo", brand=UserData.getBrand(conversation_id));
-        // console.log("Response is : "+response)
-        let forwarded_message = "User : "+ctx.message.from.username+"\n"+"Category :  Combo"+"\n"+"Product : "+productName+"\n"+"Response : "+response;
-        await bot.telegram.sendMessage(ctx.chat.id, response);
-        bot.telegram.sendMessage(6177576478, forwarded_message);
+
+
+
+        let brand_list = await getAlliasList()
+        // let get_brand = await getBrandFromName(productName)
+        let new_product_name = productName
+        // let new_product_name = await getBrandFromName(productName)
+        // productName = new_product_name
+        console.log('**************************',new_product_name)
+        console.log("_________________________", UserData.getBrand(conversation_id))
+        let brand_name = UserData.getBrand(conversation_id)
+        let nameFound = false
+        for (let brand in brand_list ){
+
+            if (productName.toString().includes(brand_list[brand])&& !nameFound)
+            {   
+                console.log(brand)
+                new_product_name= productName.replace(brand_list[brand],"")
+                console.log("Name of string after replacement "+new_product_name)
+                nameFound = true
+
+            }
+        }
+        // remove any spaces from the string
+        new_product_name = new_product_name.replace(/\s/g, '')
+        await ctx.replyWithChatAction("typing")
+        let response =  await seacrchCombo(new_product_name, brand_name);
+        console.log("Response is : "+response)
+        var phone_number = await getUserPhone(ctx.chat.id)
+        let forwarded_message = "User : "+phone_number+"\n"+"Category :  Combo"+"\n"+"Product : "+brand_name+" "+productName+"\n"+"Response : "+response;
+        
+        if (response == "Not in Stock"){
+            console.log("Model Not found ..")
+           
+            let res = await seacrchCombo(new_product_name, brand_name= undefined);
+            corrected_model = res
+
+            if (corrected_model=="Not in Stock"){
+                await ctx.reply("Not in Stock")
+                bot.telegram.sendMessage(5887384108, forwarded_message);
+                searchAnotherProductorEnd(ctx)
+            }
+            else{
+                await ctx.reply("I believe the spelling is incorrect, \n Below are simialr sounding models for other Companies... ")
+                console.log("Corrected model is : "+corrected_model)
+
+                if(corrected_model.length > 4096){
+                    for(let i=0; i<corrected_model.length; i+=4096){
+                        await ctx.reply(corrected_model.slice(i,i+4096));
+                    }
+                }
+                else{
+                    await ctx.reply(corrected_model);
+                }
+
+
+                // response_string = ""
+               
+                // await ctx.reply(response_string)
+            }
+        }
+
+       else{
+        if(response.length > 4096){
+            for(let i=0; i<response.length; i+=4096){
+                await ctx.reply(response.slice(i,i+4096));
+            }
+        }
+        else{
+            await ctx.reply(response);
+        }
         searchAnotherProductorEnd(ctx)
-        UserData.setCategory(conversation_id, "None")
+        // UserData.setCategory(conversation_id, "None")
+        await logQueries(phone_number, ctx.message.text)
+
+       }
+        
     }
         
     else if(UserData.getCategory(conversation_id)== "Charging Strip"){
@@ -416,114 +779,90 @@ else if (ctx.state.updateType == "message" && ctx.message.text != "/start" && ct
         console.log("Inside Charging Strip************")
         ctx.state.category_chosen = "None"
         let productName = ctx.message.text.toUpperCase();
-        let response = await seacrchChargingStrip(productName);
+        let brand_name = productName.split(" ")[0]
+        let model_name = productName.replace(brand_name,"").trim()
+        console.log("Model name is entered by user : "+model_name)
+        let response = await seacrchChargingStrip(model_name);
         let forwarded_message = "User : "+ctx.message.from.username+"\n"+"Category :  Charging Strip"+"\n"+"Product : "+productName+"\n"+"Response : "+response;
         await ctx.reply(response);
         bot.telegram.sendMessage(6177576478, forwarded_message);
-        // await searchAnotherProductorEnd();
         searchAnotherProductorEnd(ctx)
-        UserData.setCategory(conversation_id,"None")
+        UserData.setCategory(conversation_id, "Charging Strip")
     }
     else if(UserData.getCategory(conversation_id) == "Battery"){
         console.log("Inside Battery************"+ ctx.state.category_chosen)
         ctx.state.category_chosen = "None"
         let productName = ctx.message.text;
-        let response = await seacrchBattery(productName, category="Battery");
+        let brand_name = productName.split(" ")[0]
+        let model_name = productName.replace(brand_name,"").trim()
+        console.log("Model name is entered by user : "+model_name)
+        let response = await seacrchBattery(model_name, category="Battery", brand=brand_name);
         let forwarded_message = "User : "+ctx.message.from.username+"\n"+"Category :  Battery"+"\n"+"Product : "+productName+"\n"+"Response : "+response;
         await bot.telegram.sendMessage(ctx.chat.id, response);
         bot.telegram.sendMessage(6177576478, forwarded_message);
         // await searchAnotherProductorEnd();
         searchAnotherProductorEnd(ctx)
-        UserData.setCategory(conversation_id, "None")
+        UserData.setCategory(conversation_id, "Battery")
     }
     else{
         console.log("Inside Normal Message************")
-        await ctx.reply("Hello "+ctx.message.from.first_name+"Welcome to Vishal Telecom. I am here to help you with your order. \nPlease type /category to view the categories and the prices.")
+        await ctx.reply("Hello "+ctx.message.from.first_name+"\n Welcome to <b><i> VISHAL TELECOM's Online Assitance.</i></b> \n\nWe will help you find the price of the COMBO here.\n\n Please select the brand ..",{ parse_mode: 'HTML' })
+        // await bot.telegram.sendAnimation(ctx.chat.id, {source:"/output.gif"})
+        await askUserBrand(ctx,"Combo")
     }
+
     }
 
     next(ctx)
 })
 
-bot.start((ctx)  =>{
-    //start
-    ctx.reply("You have reached Prime..")
-    console.log(ctx.chat.id);
+bot.start(async (ctx)  =>{
+
+    console.log(ctx.message.from.id);
+
+    const args = ctx.message.text.split(' ');
+    if (args.length > 1) {
+        const argument = args[1];
+        ctx.reply(`Below are the prices of brand : ${argument}`);
+        var json_resp = await returnEntireSheet(argument);
+        
+        for(var key in json_resp){
+            // bold the key 
+            await ctx.replyWithHTML("<b>"+key+"</b>",{parse_mode: 'HTML'})
+            
+            var response_txt =""
+            for (var i = 0; i < json_resp[key].length; i++) {
+                response_txt = response_txt + json_resp[key][i] + "\n"
+            }
+            await ctx.reply(response_txt)
+
+        }
+
+    } else {
+        ctx.reply('No argument was provided.');
+    }
 
 });
-
 async function searchAnotherProductorEnd(ctx){
     await bot.telegram.sendMessage(ctx.chat.id, 'Do you want to search another product?', {
         reply_markup: {
             inline_keyboard: [[{text: 'Yes', callback_data: 'Yes'}],[{text: 'No', callback_data: 'No'}]]
             }})
+    // bot.telegram.sendAnimation(ctx.chat.id, {source:"/output.gif"})
 }
-
 bot.command("category", async(ctx) => {
+    const userExists = await checkUserLogin(ctx.chat.id)
+    if(!userExists){
+        if(UserData.getUserStatus(ctx.chat.id) == "NOT_REGISTERED"){
+            console.log(UserData.getUserStatus(ctx.chat.id))
+        await registerUser(ctx.chat.id);}
+    }
+    else{
     console.log("Inside Cartegories");
-    const categories = await readExcelSheetData(sheetName='Sheet1');
-
-    bot.telegram.sendMessage(ctx.chat.id, 'Choose a category', {
-        reply_markup: {
-            inline_keyboard: [[{text: 'Combo', callback_data: 'Combo'}],[{text: 'Charging Strip', callback_data: 'Charging Strip'}],[{text: 'Battery', callback_data: 'Battery'}]]
-            }})
-    //get the response
-
-    // let response = await seacrchCombo(productName, category="Combo");
-
+    await askUserBrand(ctx,"Combo")
+    }
 
 });
-
-// bot.action("Yes", async ctx=>{
-//     await initialChoice(ctx)
-//     console.log("Inside Yes")
-//     console.log(ctx.chat.id)
-//     // let conversation_id = ctx.chat.id
-//     UserData.setCategory(ctx.chat.id,"None")
-// }
-// )
-
-
-async function searchOptherCategories(ctx){
-    // html markup
-    bot.telegram.sendMessage(ctx.chat.id, 'Please click on the below Links to view the products : \n\n\n <a href="https://drive.google.com/file/d/1wGEyBDT7KrJ7G0AXEtZEM3QYPO0EUpmN/view">Category 1</a> \n\n'+'<a href="https://drive.google.com/file/d/1wGEyBDT7KrJ7G0AXEtZEM3QYPO0EUpmN/view">Category 2</a> \n\n'+'<a href="https://drive.google.com/file/d/1wGEyBDT7KrJ7G0AXEtZEM3QYPO0EUpmN/view">Category 3</a> \n\n'+ '<a href="https://drive.google.com/file/d/1wGEyBDT7KrJ7G0AXEtZEM3QYPO0EUpmN/view">Category 4</a> \n\n' , { parse_mode: 'HTML' }); 
-}
-
-// bot.action("No", async ctx=>{
-//     bot.telegram.sendMessage(ctx.chat.id, 'Thank you for using our service, I would also take the opputunity to intoduce you to our other services. Select OTHER PRODUCTS to view the same or END CONVERSATION to end', {
-//         reply_markup: {
-//             inline_keyboard: [[{text: 'OTHER PRODUCTS', callback_data: 'OTHER PRODUCTS'}],[{text: 'END CONVERSATION', callback_data: 'END CONVERSATION'}]]
-//             }})
-// })
-
-// bot.action("OTHER PRODUCTS", async ctx=>{
-//     await searchOptherCategories(ctx)
-//     let conversation_id = ctx.update.message.chat.id
-//     UserData.setCategory(conversation_id, "None")
-// })
-
-// bot.action("END CONVERSATION", async ctx=>{
-//     // end conversation
-//     await ctx.reply("Thank you for using our service, we hope to see you again soon")
-//     UserData.setCategory(conversation_id, "None")
-
-// });
-
-// let process.env.environment= 
-// if(process.env.environment == undefined){
-//     bot.launch({
-//       webhook:{
-//           domain: "https://nwc9xod1wb.execute-api.ap-south-1.amazonaws.com/TelegrAmBotMarketPlace",// Your domain URL (where server code will be deployed)
-//           port: process.env.PORT || 8000
-//       }
-//     }).then(() => {
-//       console.info(`The bot ${bot.botInfo.username} is running on server`);
-//     });
-//   } else { // if local use Long-polling
-//     bot.launch().then(() => {
-//       console.info(`The bot ${bot.botInfo.username} is running locally`);
-//     });
-//   }
 exports.handler = async (event, conetxt, callback) => {
     console.log("event.body is : "+event.body)
     const temp =JSON.parse(event.body)
@@ -534,84 +873,6 @@ exports.handler = async (event, conetxt, callback) => {
         body: '',
     })
 };
-
-// exports.handler = async (event) => {
-//     try {
-//       const body = JSON.parse(event.body);
-//       await bot.handleUpdate(body);
-//       return {
-//         statusCode: 200,
-//         body: JSON.stringify({ message: 'Update processed successfully' }),
-//       };
-//     } catch (error) {
-//       console.error('Error occurred:', error);
-//       return {
-//         statusCode: 500,
-//         body: JSON.stringify({ error: 'Internal Server Error' }),
-//       };
-//     }
-//   };
-
-// bot.launch()
-
-// bot.launch({
-//     webhook: {
-//       // Public domain for webhook; e.g.: example.com
-//       domain: "https://api.telegram.org/bot1959341927:AAEd1IR0H_n3QDmZpd0uGcMJY61nu6ROR0E/setWebhook?url=https://nwc9xod1wb.execute-api.ap-south-1.amazonaws.com",
-  
-//       // Port to listen on; e.g.: 8080
-//       port: 8080,
-  
-//       // Optional path to listen for.
-//       // `bot.secretPathComponent()` will be used by default
-//       hookPath: "/TelegrAmBotMarketPlace",
-  
-//       // Optional secret to be sent back in a header for security.
-//       // e.g.: `crypto.randomBytes(64).toString("hex")`
-//       secretToken: "randomAlphaNumericString",
-//     },
-//   });
-// bot.telegram.setWebhook('https://api.telegram.org/bot1959341927:AAEd1IR0H_n3QDmZpd0uGcMJY61nu6ROR0E/setWebhook?url=https://nwc9xod1wb.execute-api.ap-south-1.amazonaws.com/TelegrAmBotMarketPlace')
-// bot.startWebhook('/TelegrAmBotMarketPlace', null, 8080)
-
-// exports.handler = async (event, context, callback) => {
-//     const temp =JSON.parse(event.body);
-//     bot.handleUpdate(temp);
-//     return callback(null, {
-//         statusCode: 200,
-//         body: '',
-//     })
-// }
-
-// import { createServer } from "https";
-
-// createServer(tlsOptions, await bot.createWebhook({ domain: "https://api.telegram.org/bot1959341927:AAEd1IR0H_n3QDmZpd0uGcMJY61nu6ROR0E/setWebhook?url=https://nwc9xod1wb.execute-api.ap-south-1.amazonaws.com" })).listen(8443);
-
-
-// bot.launch({
-//     webhook: {
-//       // Public domain for webhook; e.g.: example.com
-//       domain: "https://nwc9xod1wb.execute-api.ap-south-1.amazonaws.com",
-  
-//       // Port to listen on; e.g.: 8080
-//       port: 8080,
-  
-//       // Optional path to listen for.
-//       // `bot.secretPathComponent()` will be used by default
-//       hookPath: "/TelegrAmBotMarketPlace",
-  
-//       // Optional secret to be sent back in a header for security.
-//       // e.g.: `crypto.randomBytes(64).toString("hex")`
-//     },
-//   });
-async function testfunction(){
-    console.log("Hi...")
-    let res = "Hello From the other side"
-    return res
-}
-
-
-
 module.exports.handler = (event, context, callback) => {
   try {
     // Parse the event body only if it exists and is not empty
@@ -638,45 +899,4 @@ module.exports.handler = (event, context, callback) => {
     });
   }
 };
-// bot.launch()
 
-// exports.handler = async (event) => {
-//     let message
-//     try {
-//       if (!event.body) {
-//         throw new Error("unknown request type")
-//       }
-//       let body = event.body
-//       if (event.isBase64Encoded) {
-//         body = base64Decode(body)
-//       }
-//       message = JSON.parse(body)
-//     } catch (error) {
-//       return {
-//         statusCode: 400,
-//         body: error.message,
-//       }
-//     }
-//     try {
-//     //   const botToken = await getToken() // e.g. get bot token from AWS Secrets Manager
-//     //   const bot = new Telegraf(botToken)
-//       await bot.handleUpdate(message)
-//     } catch (error) {
-//       return {
-//         statusCode: 500,
-//         body: error.message,
-//       }
-//     }
-//   }
-  
-//   function base64Decode(str) {
-//     return Buffer.from(str, "base64").toString("utf8")
-//   }
-
-
-
-
-
-
-
-// bot.launch()
